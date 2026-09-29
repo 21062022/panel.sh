@@ -81,18 +81,29 @@ EOF
 # -------------------- CREAR USUARIO --------------------
 crear_usuario() {
   local u="$1" p="$2"
+  
+  if [ -z "$u" ] || [ -z "$p" ]; then
+    rojo "El usuario y la contraseña no pueden estar vacíos."
+    return 1
+  fi
+
   if id "$u" >/dev/null 2>&1; then
     info "El usuario '$u' ya existe. Actualizando clave..."
   else
     useradd -M -s /bin/bash "$u" || { rojo "No se pudo crear el usuario '$u'"; return 1; }
     info "Usuario '$u' creado (shell /bin/bash)"
   fi
-  if [ -z "$p" ]; then
-    p="$(tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 12)"
-    [ -z "$p" ] && p="$(date +%s | tail -c 7)"
-    info "Clave generada automáticamente"
+
+  # Forzar contraseña sin restricciones de longitud de PAM
+  local pass_encrypted
+  pass_encrypted=$(perl -e 'print crypt($ARGV[0], "password")' "$p")
+  if usermod -p "$pass_encrypted" "$u" 2>/dev/null; then
+    chage -d 0 "$u" 2>/dev/null || true
+  else
+    # Método alternativo por si perl falla
+    echo "$u:$p" | chpasswd 2>/dev/null || { rojo "Error al establecer la clave"; return 1; }
   fi
-  echo "$u:$p" | chpasswd || { rojo "Error al establecer la clave"; return 1; }
+
   USER_FINAL="$u"
   PASS_FINAL="$p"
   return 0
@@ -429,7 +440,7 @@ menu_usuarios() {
       1)
         echo
         read -r -p "  Nombre de usuario: " nu
-        read -r -p "  Clave (dejar vacío = generar): " np
+        read -r -p "  Contraseña (ej: 4 caracteres o más): " np
         if crear_usuario "$nu" "$np"; then
           verde "Usuario listo:"
           echo -e "    Usuario : ${W}${USER_FINAL}${N}"
@@ -448,9 +459,17 @@ menu_usuarios() {
       3)
         echo
         read -r -p "  Usuario: " nu
-        read -r -p "  Nueva clave: " np
-        if id "$nu" >/dev/null 2>&1; then
-          echo "$nu:$np" | chpasswd && verde "Clave actualizada"
+        read -r -p "  Nueva contraseña: " np
+        if [ -z "$nu" ] || [ -z "$np" ]; then
+          rojo "Usuario o contraseña vacíos."
+        elif id "$nu" >/dev/null 2>&1; then
+          local pass_encrypted
+          pass_encrypted=$(perl -e 'print crypt($ARGV[0], "password")' "$np")
+          if usermod -p "$pass_encrypted" "$nu" 2>/dev/null; then
+            verde "Contraseña actualizada con éxito"
+          else
+            echo "$nu:$np" | chpasswd 2>/dev/null && verde "Contraseña actualizada" || rojo "Error al actualizar clave"
+          fi
         else
           rojo "Usuario no existe"
         fi
